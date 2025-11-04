@@ -43,7 +43,7 @@ ROMFS		:=	data
 
 APP_TITLE=ccleste
 APP_DESCRIPTION=Port of Celeste Classic
-APP_AUTHOR=Matt Thorson and Noel Berry, ported by lemon
+APP_AUTHOR=Maddy Thorson and Noel Berry, ported by lemon
 
 #---------------------------------------------------------------------------------
 # options for code generation
