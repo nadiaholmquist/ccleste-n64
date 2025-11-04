@@ -1,0 +1,22 @@
+BUILD_DIR=build
+SOURCE_DIR=.
+include $(N64_INST)/include/n64.mk
+
+all: ccleste.z64
+
+OBJS = $(BUILD_DIR)/celeste.o $(BUILD_DIR)/n64main.o
+
+ccleste.z64: N64_ROM_TITLE="Celeste"
+
+$(BUILD_DIR)/ccleste.dfs: $(wildcard filesystem/*)
+$(BUILD_DIR)/ccleste.elf: $(OBJS)
+
+#$(BUILD_DIR)/celeste.o: CXXFLAGS += -DCELESTE_P8_FIXEDP
+
+ccleste.z64: $(BUILD_DIR)/ccleste.dfs
+
+clean:
+	rm -f $(BUILD_DIR)/* *.z64
+
+-include $(wildcard $(BUILD_DIR)/*.d)
+.PHONY: all clean
