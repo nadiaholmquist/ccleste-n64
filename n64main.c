@@ -134,7 +134,9 @@ void draw() {
 
 static int buttons_state = 0;
 
-//static xm64player_t music[5] = {0};
+static xm64player_t music[5] = {0};
+int cur_music = -1;
+int music_channel = 4;
 
 struct sfx_file {
 	int index;
@@ -160,14 +162,11 @@ int main(int argc, char** argv) {
 	mixer_init(32);
 	wav64_init_compression(3);
 
-	/*
 	for (int i = 0; i < 5; i++) {
 		char fname[32] = {0};
 		snprintf(fname, 32, "rom://mus%d.xm64", i * 10);
 		xm64player_open(&music[i], fname);
 	}
-	xm64player_play(&music[0], 0);
-	*/
 
 	for (int i = 0; i < num_sounds; i++) {
 		char fname[32];
@@ -355,11 +354,17 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 			(void)mask; //we do not care about this since sdl mixer keeps sounds and music separate
 
 			if (index == -1) { //stop playing
-				//if (music.ctx != NULL)
-					//xm64player_close(&music);
+				if (cur_music != -1) {
+					xm64player_stop(&music[cur_music]);
+					cur_music = -1;
+				}
 			} else {
-				//xm64player_open(&music, "rom://mus10.xm64");
-				//xm64player_play(&music, 0);
+				if (cur_music != -1)
+					xm64player_stop(&music[cur_music]);
+				music_channel = music_channel == 4 ? 8 : 4;
+				xm64player_play(&music[index / 10], music_channel);
+				xm64player_set_vol(&music[index / 10], 3.0);
+				cur_music = index / 10;
 			}
 		} break;
 		case CELESTE_P8_SPR: { //spr(sprite,x,y,cols,rows,flipx,flipy)

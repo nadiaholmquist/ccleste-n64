@@ -8,15 +8,22 @@ OBJS = $(BUILD_DIR)/celeste.o $(BUILD_DIR)/n64main.o
 
 sounds = $(wildcard data/*.wav)
 sounds_conv = $(addprefix filesystem/,$(notdir $(sounds:%.wav=%.wav64)))
+music = $(wildcard data/*.xm)
+music_conv = $(addprefix filesystem/,$(notdir $(music:%.xm=%.xm64)))
 
 filesystem/%.wav64: data/%.wav
 	@mkdir -p $(dir $@)
 	@echo "    [AUDIO] $@"
 	@$(N64_AUDIOCONV) --wav-compress 0 -o filesystem $<
 
+filesystem/%.xm64: data/%.xm
+	@mkdir -p $(dir $@)
+	@echo "    [AUDIO] $@"
+	@$(N64_AUDIOCONV) --xm-compress 0 -o filesystem $<
+
 ccleste.z64: N64_ROM_TITLE="Celeste"
 
-$(BUILD_DIR)/ccleste.dfs: filesystem/gfx.bin filesystem/font.bin ${sounds_conv}
+$(BUILD_DIR)/ccleste.dfs: filesystem/gfx.bin filesystem/font.bin ${sounds_conv} ${music_conv}
 $(BUILD_DIR)/ccleste.elf: $(OBJS)
 
 #$(BUILD_DIR)/celeste.o: CXXFLAGS += -DCELESTE_P8_FIXEDP
@@ -24,7 +31,7 @@ $(BUILD_DIR)/ccleste.elf: $(OBJS)
 ccleste.z64: $(BUILD_DIR)/ccleste.dfs
 
 clean:
-	rm -f $(BUILD_DIR)/* *.z64 *.dfs
+	rm -f $(BUILD_DIR)/* *.z64 *.dfs filesystem/*.wav64 filesystem/*.xm64
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 .PHONY: all clean

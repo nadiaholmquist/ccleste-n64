@@ -13,3 +13,7 @@ em-build/
 ccleste-win.zip
 ccleste-input-cfg.txt
 ccleste-start-fullscreen.txt
+
+# N64
+filesystem/*.wav64
+filesystem/*.xm64
