@@ -154,8 +154,12 @@ int main(int argc, char** argv) {
 	rdpq_init();
 	joypad_init();
 	audio_init(44100, 4);
-	mixer_init(32);
+	mixer_init(16);
 	wav64_init_compression(3);
+
+	// Reduce the volume a bit for the channels that will be used for sound effects to avoid clipping
+	for (int i = 0; i < 4; i++)
+		mixer_ch_set_vol(i, 0.5, 0.5);
 
 	for (int i = 0; i < 5; i++) {
 		char fname[32] = {0};
@@ -357,7 +361,7 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 					xm64player_stop(&music[cur_music]);
 				music_channel = music_channel == 4 ? 8 : 4;
 				xm64player_play(&music[index / 10], music_channel);
-				xm64player_set_vol(&music[index / 10], 3.0);
+				xm64player_set_vol(&music[index / 10], 2.0);
 				cur_music = index / 10;
 			}
 		} break;
