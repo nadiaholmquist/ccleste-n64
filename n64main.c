@@ -6,13 +6,6 @@
 
 int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...);
 
-/*
-uint32_t base_palette[16] = {
-	0x000000FF, 0x1D2B53FF, 0x7E2553FF, 0x008751FF, 0xAB5236FF, 0x5F574FFF, 0xC2C3C7FF, 0xFFF1E8FF,
-	0xFF004DFF, 0xFFA300FF, 0xFFEC27FF, 0x00E436FF, 0x29ADFFFF, 0x83769CFF, 0xFF77A8FF, 0xFFCCAAFF,
-};
-*/
-
 uint8_t test_tas[] = {
 #include "test-tas.txt"
 };
@@ -20,29 +13,20 @@ int tas_frame = 0;
 bool play_tas = false;
 
 uint16_t base_palette[16] = {
-	0x0000,
-	0x1955,
-	0x7915,
-	0x0415,
-	0xaa8d,
-	0x5a93,
-	0xc631,
-	0xffbb,
-	0xf813,
-	0xfd01,
-	0xff49,
-	0x070d,
-	0x2d7f,
-	0x83a7,
-	0xfbab,
-	0xfe6b,
+	0x0000, 0x1955, 0x7915, 0x0415, 0xaa8d, 0x5a93, 0xc631, 0xffbb,
+	0xf813, 0xfd01, 0xff49, 0x070d, 0x2d7f, 0x83a7, 0xfbab, 0xfe6b,
 };
+
+uint32_t base_palette_rgba32[16] = {
+	0x000000FF, 0x1D2B53FF, 0x7E2553FF, 0x008751FF, 0xAB5236FF, 0x5F574FFF, 0xC2C3C7FF, 0xFFF1E8FF,
+	0xFF004DFF, 0xFFA300FF, 0xFFEC27FF, 0x00E436FF, 0x29ADFFFF, 0x83769CFF, 0xFF77A8FF, 0xFFCCAAFF,
+};
+
 __attribute__((aligned(8)))
 static uint16_t base_palette_for_rsp[64];
 
-// used when drawing filled rectangles or text, but not the CI4 textures
-__attribute__((aligned(16)))
-static uint16_t cur_palette[16];
+// holds base palette indices for palette remapping
+static uint8_t cur_palette[16];
 
 static surface_t p8_fb;
 static surface_t gfx_tex;
@@ -94,6 +78,18 @@ void set_draw_mode(const int mode) {
 		assert(false);
 		break;
 	}
+}
+
+uint16_t* get_color_rgba16(int index) {
+	const int palindex = cur_palette[index];
+	return &base_palette_for_rsp[palindex * 4];
+}
+
+color_t get_color_rgba32(int index) {
+	const int palindex = cur_palette[index];
+	const uint32_t c = base_palette_rgba32[palindex];
+	const color_t color = { (c >> 24) & 0xFF, (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF };
+	return color;
 }
 
 void draw() {
@@ -190,7 +186,8 @@ int main(int argc, char** argv) {
 	else
 		Celeste_P8_set_rndseed(rand());
 
-	memcpy(cur_palette, base_palette, 16 * sizeof(uint16_t));
+	for (int i = 0; i < 16; i++)
+		cur_palette[i] = i;
 	Celeste_P8_init();
 
 	p8_fb = surface_alloc(FMT_RGBA16, 128, 128);
@@ -258,6 +255,14 @@ void draw_tile(uint16_t tile, int16_t x, int16_t y, bool flip_x, bool flip_y) {
 
 	rdpq_texparms_t p = { 0 };
 
+	// font was loaded, need to (rather inefficiently) restore the tlut
+	if (loaded_texture == 2) {
+		for (int i = 0; i < 16; i++) {
+			int index = cur_palette[i];
+			rdpq_tex_upload_tlut(&base_palette_for_rsp[i*4], index, 1);
+		}
+	}
+
 	if (s > 63 && loaded_texture != 1) {
 		rdpq_tex_upload_sub(0, &gfx_tex, &p, 64, 0, 128, 64);
 		loaded_texture = 1;
@@ -292,19 +297,9 @@ void draw_line(color_t color, int x0, int y0, int x1, int y1) {
 	rdpq_triangle(&TRIFMT_FILL, &vertices[2], &vertices[0], &vertices[6]);
 }
 
-color_t rgba16_to_rgba32(uint16_t in) {
-	color_t out = {
-		((in >> 11) & 0x1F) << 3,
-		((in >> 6) & 0x1F) << 3,
-		((in >> 1) & 0x1F) << 3,
-		((in >> 0) & 0x1) > 0 ? 0xFF : 0x00,
-	};
-	return out;
-}
-
 static void p8_print(const char* str, int x, int y, int col) {
 	set_draw_mode(DRAW_MODE_TEXT);
-	color_t color = rgba16_to_rgba32(cur_palette[col]);
+	color_t color = get_color_rgba32(col);
 	color.a = 0xFF;
 	rdpq_set_prim_color(color);
 
@@ -408,12 +403,13 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 			if (a >= 0 && a < 16 && b >= 0 && b < 16) {
 				//swap palette colors
 				rdpq_tex_upload_tlut(&base_palette_for_rsp[b*4], a, 1);
-				cur_palette[a] = base_palette[b];
+				cur_palette[a] = b;
 			}
 		} break;
 		case CELESTE_P8_PAL_RESET: { //pal()
 			rdpq_tex_upload_tlut(base_palette, 0, 16);
-			memcpy(cur_palette, base_palette, 16 * sizeof(uint16_t));
+			for (int i = 0; i < 16; i++)
+				cur_palette[i] = i;
 		} break;
 		case CELESTE_P8_CIRCFILL: { //circfill(x,y,r,col)
 			int cx = INT_ARG() - camera_x;
@@ -422,7 +418,7 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 			int col = INT_ARG();
 
 			set_draw_mode(DRAW_MODE_FILL);
-			rdpq_set_fill_color(rgba16_to_rgba32(cur_palette[col]));
+			rdpq_set_fill_color(get_color_rgba32(col));
 
 			if (r == 1) {
 				rdpq_draw_pixel(cx, cy);
@@ -454,7 +450,7 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 			int col = INT_ARG();
 
 			set_draw_mode(DRAW_MODE_FILL);
-			rdpq_set_fill_color(rgba16_to_rgba32(cur_palette[col]));
+			rdpq_set_fill_color(get_color_rgba32(col));
 			rdpq_fill_rectangle(x0, y0, x1, y1);
 		} break;
 		case CELESTE_P8_LINE: { //line(x0,y0,x1,y1,col)
@@ -464,7 +460,7 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 			int y1 = INT_ARG() - camera_y;
 			int col = INT_ARG();
 
-			draw_line(rgba16_to_rgba32(cur_palette[col]), x0, y0, x1, y1);
+			draw_line(get_color_rgba32(col), x0, y0, x1, y1);
 		} break;
 		case CELESTE_P8_MGET: { //mget(tx,ty)
 			int tx = INT_ARG();
