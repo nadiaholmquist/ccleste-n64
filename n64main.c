@@ -152,7 +152,6 @@ int main(int argc, char** argv) {
 	debug_init_isviewer();
 	dfs_init(DFS_DEFAULT_LOCATION);
 	rdpq_init();
-	rdpq_debug_start();
 	joypad_init();
 	audio_init(44100, 4);
 	mixer_init(32);
