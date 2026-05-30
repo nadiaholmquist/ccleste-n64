@@ -14,12 +14,12 @@ music_conv = $(addprefix filesystem/,$(notdir $(music:%.xm=%.xm64)))
 filesystem/%.wav64: data/%.wav
 	@mkdir -p $(dir $@)
 	@echo "    [AUDIO] $@"
-	@$(N64_AUDIOCONV) --wav-compress 0 -o filesystem $<
+	@$(N64_AUDIOCONV) -o filesystem $<
 
 filesystem/%.xm64: data/%.xm
 	@mkdir -p $(dir $@)
 	@echo "    [AUDIO] $@"
-	@$(N64_AUDIOCONV) --xm-compress 0 -o filesystem $<
+	@$(N64_AUDIOCONV) -o filesystem $<
 
 ccleste.z64: N64_ROM_TITLE="Celeste"
 
