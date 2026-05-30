@@ -36,48 +36,114 @@ static int8_t loaded_texture = -1;
 
 static float scale = 1.0f;
 static float scaling = 0.0f;
+static bool enable_sfx = true;
+int enable_screenshake = 2;
+
+static int buttons_state = 0;
+
+static xm64player_t music[5] = {0};
+int cur_music = -1;
+int music_channel = 4;
+
+struct sfx_file {
+	int index;
+	wav64_t wav;
+};
+
+static const int sfx_indices[] = {
+	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 13, 14, 15, 16, 23, 35, 37, 38, 40, 50, 51, 54, 55
+};
+static const int num_sounds = sizeof(sfx_indices) / sizeof(sfx_indices[0]);
+static struct sfx_file sounds[(sizeof(sfx_indices) / sizeof(sfx_indices[0])) + 1] = { 0 };
+static uint8_t sfx_channel = 0;
+
+typedef struct MenuOption {
+	int current_value;
+	const char* title;
+	const char** values;
+	void (*on_change)(int);
+} MenuOption;
+
+static const char* scale_options[] = { "1x", "2x", NULL };
+static const char* toggle_options[] = { "off", "on", NULL };
+static const char* screenshake_options[] = { "off", "reduce", "on", NULL };
+
+static void option_scale_change(int value) { scaling = scale > 1.5f ? -0.1f : 0.1f; }
+static void option_music_change(int value) {
+	for (int i = 0; i < 5; i++)
+		xm64player_set_vol(&music[i], value == 1 ? 2.0 : 0.0);
+}
+static void option_sfx_change(int value) { enable_sfx = value; }
+static void option_screenshake_change(int value) { enable_screenshake = value; }
+static void option_60hz_change(int value) {
+	resolution_t res = RESOLUTION_320x240;
+	if (value == 0) {
+		res.width = 384;
+		res.height = 288;
+	}
+	display_change(res, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
+	vi_set_timing_preset(value == 1 ? &VI_TIMING_PAL60 : &VI_TIMING_PAL);
+}
+
+static MenuOption menu_options[] = {
+	{ 0, "scale", scale_options, option_scale_change },
+	{ 0, "60hz mode", toggle_options, option_60hz_change },
+	{ 2, "screen shake", screenshake_options, option_screenshake_change },
+	{ 1, "music", toggle_options, option_music_change },
+	{ 1, "sound effects", toggle_options, option_sfx_change }
+};
+
+static bool show_menu = false;
+static int menu_index = 0;
 
 enum DrawMode {
 	DRAW_MODE_COPY_TLUT,
 	DRAW_MODE_STD_TLUT,
 	DRAW_MODE_FILL,
 	DRAW_MODE_FLAT,
-	DRAW_MODE_TEXT
+	DRAW_MODE_TEXT,
+	DRAW_MODE_MAX
 };
+
+rspq_block_t* draw_mode_blocks[DRAW_MODE_MAX];
+
+void create_draw_mode_blocks(void) {
+	rspq_block_begin();
+	rdpq_set_mode_standard();
+	rdpq_set_mode_copy(true);
+	rdpq_mode_tlut(TLUT_RGBA16);
+	draw_mode_blocks[DRAW_MODE_COPY_TLUT] = rspq_block_end();
+
+	rspq_block_begin();
+	rdpq_set_mode_standard();
+	rdpq_mode_alphacompare(1);
+	rdpq_mode_tlut(TLUT_RGBA16);
+	draw_mode_blocks[DRAW_MODE_STD_TLUT] = rspq_block_end();
+
+	rspq_block_begin();
+	rdpq_set_mode_standard();
+	rdpq_set_mode_fill(RGBA32(0,0,0,0));
+	draw_mode_blocks[DRAW_MODE_FILL] = rspq_block_end();
+
+	rspq_block_begin();
+	rdpq_set_mode_standard();
+	rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+	draw_mode_blocks[DRAW_MODE_FLAT] = rspq_block_end();
+
+	rspq_block_begin();
+	rdpq_set_mode_standard();
+	rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+	rdpq_mode_alphacompare(1);
+	rdpq_mode_tlut(TLUT_NONE);
+	draw_mode_blocks[DRAW_MODE_TEXT] = rspq_block_end();
+}
 
 void set_draw_mode(const int mode) {
 	static int cur_mode = -1;
 	if (cur_mode == mode) return;
 	cur_mode = mode;
 	if (mode == -1) return;
-
-	switch (mode) {
-	case DRAW_MODE_COPY_TLUT:
-		rdpq_set_mode_copy(true);
-		rdpq_mode_tlut(TLUT_RGBA16);
-		break;
-	case DRAW_MODE_STD_TLUT:
-		rdpq_set_mode_standard();
-		rdpq_mode_alphacompare(1);
-		rdpq_mode_tlut(TLUT_RGBA16);
-		break;
-	case DRAW_MODE_FILL:
-		rdpq_set_mode_fill(RGBA32(0,0,0,0));
-		break;
-	case DRAW_MODE_FLAT:
-		rdpq_set_mode_standard();
-		rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-		break;
-	case DRAW_MODE_TEXT:
-		rdpq_set_mode_standard();
-		rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-		rdpq_mode_alphacompare(1);
-		rdpq_mode_tlut(TLUT_NONE);
-		break;
-	default:
-		assert(false);
-		break;
-	}
+	rspq_block_run(draw_mode_blocks[mode]);
 }
 
 uint16_t* get_color_rgba16(int index) {
@@ -92,13 +158,43 @@ color_t get_color_rgba32(int index) {
 	return color;
 }
 
+static void p8_print(const char* str, int x, int y, color_t color, bool big);
+
+void draw_menu() {
+	int width = display_get_width();
+	//int height = display_get_height();
+	//
+
+	int x = 112;
+	int y = 64;
+
+	loaded_texture = -1;
+	p8_print("OPTIONS", (width/2)-(8*7/2), y, RGBA32(0xFF, 0xFF, 0xFF, 0xFF), true);
+	y += 24;
+
+	loaded_texture = -1;
+	const int xoff = 64;
+	for (int i = 0; i < sizeof(menu_options) / sizeof(MenuOption); i++) {
+		const MenuOption* opt = &menu_options[i];
+		if (opt->current_value == -1) continue;
+		color_t color = menu_index == i ? RGBA32(0xFF, 0xFF, 0xFF, 0xFF) : RGBA32(0x7F, 0x7F, 0x7F, 0xFF);
+		p8_print(opt->title, x, y, color, false);
+
+		char buf[32] = {0};
+		snprintf(buf, 32, "%s %s %s", opt->current_value > 0 ? "<" : " ", opt->values[opt->current_value], opt->values[opt->current_value + 1] != NULL ? ">" : " ");
+		p8_print(buf, x + xoff, y, color, false);
+
+		y += 12;
+	}
+}
+
 void draw() {
 	rdpq_attach(&p8_fb, NULL);
 
 	loaded_texture = -1;
 	set_draw_mode(-1);
 	Celeste_P8_draw();
-	rdpq_detach_wait();
+	rdpq_detach();
 
 	rdpq_attach_clear(display_get(), NULL);
 	rdpq_set_mode_standard();
@@ -124,38 +220,43 @@ void draw() {
 	p.scale_x = scale;
 	p.scale_y = scale;
 
-	rdpq_tex_blit(&p8_fb, centerx - scaled, centery - scaled, &p);
+	if (show_menu) {
+		loaded_texture = -1;
+		rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY_CONST);
+		rdpq_set_fog_color(RGBA32(0, 0, 0, 0x3F));
+		rdpq_tex_blit(&p8_fb, centerx - scaled, centery - scaled, &p);
+		set_draw_mode(-1);
+		rdpq_set_mode_standard();
+		draw_menu();
+	} else {
+		rdpq_tex_blit(&p8_fb, centerx - scaled, centery - scaled, &p);
+	}
+
 	rdpq_detach_show();
 }
 
-static int buttons_state = 0;
-
-static xm64player_t music[5] = {0};
-int cur_music = -1;
-int music_channel = 4;
-
-struct sfx_file {
-	int index;
-	wav64_t wav;
-};
-
-static const int sfx_indices[] = {
-	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 13, 14, 15, 16, 23, 35, 37, 38, 40, 50, 51, 54, 55
-};
-static const int num_sounds = sizeof(sfx_indices) / sizeof(sfx_indices[0]);
-static struct sfx_file sounds[(sizeof(sfx_indices) / sizeof(sfx_indices[0])) + 1] = { 0 };
-static uint8_t sfx_channel = 0;
-
 int main(int argc, char** argv) {
-	display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
+	debug_init(DEBUG_FEATURE_LOG_USB | DEBUG_FEATURE_LOG_EMU);
 
-	debug_init_isviewer();
+	resolution_t res = {0};
+	if (get_tv_type() != TV_PAL) {
+		menu_options[1].current_value = -1;
+		res = RESOLUTION_320x240;
+	} else {
+		res.width = 384;
+		res.height = 288;
+		scale = 2.f;
+		menu_options[0].current_value++;
+	}
+	display_init(res, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
+
 	dfs_init(DFS_DEFAULT_LOCATION);
 	rdpq_init();
 	joypad_init();
 	audio_init(44100, 4);
 	mixer_init(16);
-	wav64_init_compression(3);
+
+	create_draw_mode_blocks();
 
 	// Reduce the volume a bit for the channels that will be used for sound effects to avoid clipping
 	for (int i = 0; i < 4; i++)
@@ -165,6 +266,7 @@ int main(int argc, char** argv) {
 		char fname[32] = {0};
 		snprintf(fname, 32, "rom://mus%d.xm64", i * 10);
 		xm64player_open(&music[i], fname);
+		xm64player_set_vol(&music[i], 2.0);
 	}
 
 	for (int i = 0; i < num_sounds; i++) {
@@ -211,6 +313,7 @@ int main(int argc, char** argv) {
 	while (1) {
 		joypad_poll();
 		joypad_buttons_t btns = joypad_get_buttons(JOYPAD_PORT_1);
+		joypad_buttons_t pressed = joypad_get_buttons_pressed(JOYPAD_PORT_1);
 		if (play_tas) {
 			static int t = 0;
 			t++;
@@ -223,19 +326,44 @@ int main(int argc, char** argv) {
 			} else buttons_state = 0;
 		} else {
 			buttons_state = 0;
-			buttons_state |= ((btns.d_left & 1) << 0);
-			buttons_state |= ((btns.d_right & 1) << 1);
-			buttons_state |= ((btns.d_up & 1) << 2);
-			buttons_state |= ((btns.d_down & 1) << 3);
-			buttons_state |= ((btns.a & 1) << 4);
-			buttons_state |= ((btns.b & 1) << 5);
+			if (!show_menu) {
+				buttons_state |= ((btns.d_left & 1) << 0);
+				buttons_state |= ((btns.d_right & 1) << 1);
+				buttons_state |= ((btns.d_up & 1) << 2);
+				buttons_state |= ((btns.d_down & 1) << 3);
+				buttons_state |= ((btns.a & 1) << 4);
+				buttons_state |= ((btns.b & 1) << 5);
+			} else {
+				int num_options = sizeof(menu_options) / sizeof(MenuOption);
 
-			if (joypad_get_buttons_pressed(JOYPAD_PORT_1).z) {
-				scaling = scale > 1.5f ? -0.1f : 0.1f;
+				if (pressed.d_up) {
+					menu_index--;
+					if (menu_index < 0) menu_index = num_options - 1;
+					if (menu_options[menu_index].current_value == -1) menu_index--;
+				} else if (pressed.d_down) {
+					menu_index++;
+					if (menu_index >= num_options) menu_index = 0;
+					if (menu_options[menu_index].current_value == -1) menu_index++;
+				}
+
+				MenuOption* cur_option = &menu_options[menu_index];
+
+				if (pressed.d_left && cur_option->current_value != 0) {
+					cur_option->current_value--;
+					if (cur_option->on_change) cur_option->on_change(cur_option->current_value);
+				}
+				if (pressed.d_right && cur_option->values[cur_option->current_value + 1] != NULL) {
+					menu_options[menu_index].current_value++;
+					if (cur_option->on_change) cur_option->on_change(cur_option->current_value);
+				}
 			}
+
+			if (pressed.start)
+				show_menu ^= 1;
 		}
 
-		Celeste_P8_update();
+		if (!show_menu)
+			Celeste_P8_update();
 
 		draw();
 		mixer_try_play();
@@ -243,8 +371,6 @@ int main(int argc, char** argv) {
 
 	return 0;
 }
-
-bool enable_screenshake = true;
 
 static int gettileflag(int tile, int flag) {
 	return tile < sizeof(tile_flags)/sizeof(*tile_flags) && (tile_flags[tile] & (1 << flag)) != 0;
@@ -300,14 +426,16 @@ void draw_line(color_t color, int x0, int y0, int x1, int y1) {
 	rdpq_triangle(&TRIFMT_FILL, &vertices[2], &vertices[0], &vertices[6]);
 }
 
-static void p8_print(const char* str, int x, int y, int col) {
+static void p8_print(const char* str, int x, int y, color_t color, bool big) {
 	set_draw_mode(DRAW_MODE_TEXT);
-	color_t color = get_color_rgba32(col);
-	color.a = 0xFF;
 	rdpq_set_prim_color(color);
 
 	if (loaded_texture != 2) {
 		rdpq_texparms_t p = { 0 };
+		if (big) {
+			p.s.scale_log = 1;
+			p.t.scale_log = 1;
+		}
 		rdpq_tex_upload(0, &font_tex, &p);
 		loaded_texture = 2;
 	}
@@ -321,9 +449,14 @@ static void p8_print(const char* str, int x, int y, int col) {
 		int s = 8 * (c % 16);
 		int t = (8 * (c / 16)) - 16;
 
-		rdpq_texture_rectangle(0, x, y, x + 4, y + 8, s, t);
+		if (big) {
+			s *= 2;
+			t *= 2;
+		}
 
-		x += 4;
+		rdpq_texture_rectangle(0, x, y, x + (big ? 8 : 4), y + (big ? 16 : 8), s, t);
+
+		x += big ? 8 : 4;
 	}
 }
 
@@ -361,7 +494,6 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 					xm64player_stop(&music[cur_music]);
 				music_channel = music_channel == 4 ? 8 : 4;
 				xm64player_play(&music[index / 10], music_channel);
-				xm64player_set_vol(&music[index / 10], 2.0);
 				cur_music = index / 10;
 			}
 		} break;
@@ -390,6 +522,7 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 		} break;
 		case CELESTE_P8_SFX: { //sfx(id)
 			int id = INT_ARG();
+			if (!enable_sfx) break;
 
 			for (int i = 0; i < num_sounds; i++) {
 				if (sounds[i].index == id) {
@@ -441,9 +574,10 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 			(void)str;
 			(void)x;
 			(void)y;
-			(void)col;
 
-			p8_print(str,x,y,col);
+			color_t color = get_color_rgba32(col);
+			color.a = 0xFF;
+			p8_print(str,x,y,color, false);
 		} break;
 		case CELESTE_P8_RECTFILL: { //rectfill(x0,y0,x1,y1,col)
 			int x0 = INT_ARG() - camera_x;
@@ -475,6 +609,10 @@ int pico8emu(CELESTE_P8_CALLBACK_TYPE call, ...) {
 			if (enable_screenshake) {
 				camera_x = INT_ARG();
 				camera_y = INT_ARG();
+				if (enable_screenshake == 1) {
+					camera_x /= 2;
+					camera_y /= 2;
+				}
 			}
 		} break;
 		case CELESTE_P8_FGET: { //fget(tile,flag)
